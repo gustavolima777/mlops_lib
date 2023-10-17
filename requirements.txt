@@ -1,5 +1,6 @@
+wheel
 pandas
 numpy
 boto3
-pyathena
 great_expectations
+git+https://github.com/gustavolima777/mlops_lib.git

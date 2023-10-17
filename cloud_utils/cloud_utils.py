@@ -5,20 +5,23 @@ import time
 import os
 import pandas as pd
 import numpy as np
+import datetime
 from utils.utils import get_random_string
-from pyathena import connect
-from pyathena.pandas.cursor import PandasCursor
 
 
 class CloudUtils:
     def __init__(self,
                  team_id,
+                 workgroup = None,
                  project_path='project_example/',
                  region='us-east-1',
                  pd_cursor=True):
         
         self.session = self.get_boto3_session()
         self.s3 = self.session.client('s3')
+        self.glue = self.session.client('glue')
+        self.athena = self.session.client('athena')
+        self.sagemaker = self.session.client('sagemaker')
         self.team_id = team_id
         self.bucket = [bucket['Name'] 
                            for bucket in self.s3.list_buckets()['Buckets'] 
@@ -29,49 +32,11 @@ class CloudUtils:
         self.tables_path = self.s3_staging_dir + self.project_path + 'tables/'
         self.sagemaker_artefacts_path = self.s3_staging_dir + self.project_path + 'sagemaker/'
         self.region = region
-        self.pyathena_connector = self.get_pyathena_connector(pd_cursor)
-        self.glue = self.session.client('glue')
-        self.sagemaker = self.session.client('sagemaker')
+
+        print(f"Bucket {self.bucket} is sucessfull selected")
   
     def get_boto3_session(self):
         return boto3.Session()
-
-    def get_pyathena_connector(self, pd_cursor):
-        conn = connect(
-            s3_staging_dir=self.s3_staging_dir,
-            region_name=self.region,
-            cursor_class=PandasCursor if pd_cursor else None)
-        return conn.cursor() if pd_cursor else conn
-
-    def write_s3(self, df, file_path, save_index=False, int_to_str=False):
-        file_type = file_path.split('.')[-1]
-
-        if file_type == 'parquet':
-            save_method = df.to_parquet
-        elif file_type == 'csv':
-            save_method = df.to_csv
-        elif file_type == 'xlsx':
-            save_method = df.to_excel
-        else:
-            raise f'File Type ({file_type}) not allowed'
-
-        local_key_path = self.local_path + file_path
-        self.save_file_pandas(df, save_method, local_key_path, save_index,
-                              int_to_str)
-
-        key_path = self.project_path + file_path
-        self.s3.upload_file(local_key_path, self.bucket_name, key_path)
-
-        print(f'- Save to S3\n{file_type} File: {file_path}\nShape: '
-              + f'{df.shape}')
-
-    @staticmethod
-    def save_file_pandas(df, save_method, file_path, save_index, int_to_str):
-        if int_to_str:
-            save_method(file_path, index=save_index,
-                        quoting=csv.QUOTE_NONNUMERIC)
-        else:
-            save_method(file_path, index=save_index)
 
     def delete_files_from_s3(self, prefix):
         s3 = boto3.resource('s3')
@@ -83,26 +48,7 @@ class CloudUtils:
                 print(f'file {i.key.split("/")[-1]} deleted')
         except Exception as ex:
             print(str(ex))
-
-    def get_df_from_athena_query(self, file, cursor=False):
-        query = open(file, 'r')
-
-        if cursor:
-            df = self.pyathena_connector.execute(query.read()).as_pandas()
-        else:
-            df = pd.read_sql(query.read(), self.pyathena_connector)
-        query.close()
-
-        return df
-
-    def get_df_from_file(self, file, use_s3, method, **kwargs):
-        if use_s3:
-            file_path = self.s3_staging_dir + self.project_path + file
-        else:
-            file_path = self.local_path + file
-
-        return method(file_path, **kwargs)
-    
+            
     def delete_glue_job(self,job_name):
         try:
             delete_response = self.glue.delete_job(JobName=job_name)
@@ -116,7 +62,12 @@ class CloudUtils:
     def run_spark_sql(self,query_sql,spark_session):
         return spark_session.sql(query_sql)
     
-    def process_glue_job(self,query_sql,glue_arn,get_data = False,advanced_resourses = False,max_time_running_job_mins = 10):
+    def process_glue_job(self,
+                         query_sql,
+                         glue_arn,
+                         get_data = False,
+                         advanced_resourses = False,
+                         max_time_running_job_mins = 10):
         
         job_name = f'spark-to-s3-parquet-{get_random_string()}'
         print(f"-Start spark job name:{job_name}, staging_dir:{self.s3_staging_dir}")
@@ -235,3 +186,72 @@ class CloudUtils:
                 
         except Exception as error:
             print("An error occurred when trying create spark job:", error)
+            
+    def athena_query(self,
+                     sql_query,
+                     workgroup = 'gg_consumo_voomp',
+                     pandas_dataframe = False):
+    
+        listOfStatus = ['SUCCEEDED', 'FAILED', 'CANCELLED']
+        listOfInitialStatus = ['RUNNING', 'QUEUED']
+        
+        print('Starting Query Execution:')        
+        response = self.athena.start_query_execution(
+            QueryString = sql_query,
+            WorkGroup = workgroup
+        )
+
+        queryExecutionId = response['QueryExecutionId']
+
+        status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
+
+        while status in listOfInitialStatus:
+            status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
+            if status in listOfStatus:
+                if status == 'SUCCEEDED':
+                    print('Query Succeeded!')
+                    paginator = self.athena.get_paginator('get_query_results')
+                    query_results = paginator.paginate(
+                        QueryExecutionId = queryExecutionId,
+                        PaginationConfig = {'PageSize': 1000}
+                    )
+                elif status == 'FAILED':
+                    print('Query Failed!')
+                elif status == 'CANCELLED':
+                    print('Query Cancelled!')
+                break
+        
+        if pandas_dataframe:
+            results = []
+            rows = []
+        
+            
+            for page in query_results:
+                for row in page['ResultSet']['Rows']:
+                    rows.append(row['Data'])
+
+            columns = rows[0]
+            rows = rows[1:]
+
+            columns_list = []
+            for column in columns:
+                columns_list.append(column['VarCharValue'])
+
+            dataframe = pd.DataFrame(columns = columns_list)
+
+            for row in rows:
+                df_row = []
+                for data in row:
+                    if len(data.values())>0:
+                        df_row.append(data['VarCharValue'])
+                    else:
+                        df_row.append(np.nan)
+                dataframe.loc[len(dataframe)] = df_row
+                
+            print('Pandas dataframe sucessfully created')
+            return(dataframe)
+        
+    def s3_to_athena_table(self,
+                           s3_partquet_path,
+                           workgroup='gg_consumo_voomp'):
+        self.athena_query(sql_query,workgroup = workgroup)
