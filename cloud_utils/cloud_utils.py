@@ -6,6 +6,9 @@ import os
 import pandas as pd
 import numpy as np
 from utils.utils import get_random_string
+from pyathena import connect
+from pyathena.pandas.cursor import PandasCursor
+
 
 class CloudUtils:
     def __init__(self,
