@@ -6,6 +6,7 @@ import os
 import pandas as pd
 import numpy as np
 import datetime
+import pyarrow
 from utils.utils import get_random_string
 
 
@@ -252,6 +253,61 @@ class CloudUtils:
             return(dataframe)
         
     def s3_to_athena_table(self,
-                           s3_partquet_path,
-                           workgroup='gg_consumo_voomp'):
-        self.athena_query(sql_query,workgroup = workgroup)
+                           table_name,
+                           database,
+                           s3_parquet_path,
+                           is_unique_parquet=True,
+                           workgroup='gg_consumo_voomp',
+                           drop_table = False):
+        
+        if is_unique_parquet:
+            schema = pyarrow.parquet.read_schema(s3_parquet_path,memory_map=True)
+        else:
+            pyarrow_tables = []
+            for file in parquet_files:
+                table = pyarrow.parquet.read_table('s3://'+file)
+                pyarrow_tables.append(table)
+            schema = pyarrow.concat_tables(pyarrow_tables).schema
+            
+        schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
+                           for name, pa_dtype in zip(schema.names, schema.types)))
+        
+        schema=", ".join(schema\
+        .assign(tipo = lambda x: np.select(
+                                            [
+                                                x.d_type == 'string',
+                                                x.d_type == 'int64',
+                                                x.d_type == 'int32', 
+                                                x.d_type.str.contains('decimal'),
+                                                x.d_type == 'bool', 
+                                                x.d_type.str.contains('timestamp')
+                                            ],
+                                            [
+                                                'string',
+                                                'bigint',
+                                                'int',
+                                                'decimal',
+                                                'boolean',
+                                                'timestamp'
+                                            ],
+                                            default = x.d_type))\
+        .assign(sql = lambda x: x.column + " " + x.tipo).sql)
+
+        output_path = self.tables_path+table_name+'_'+database+'/'
+            
+        query = textwrap.dedent(f'''
+        CREATE EXTERNAL TABLE {database}.{table_name}
+        ( {schema} )
+        STORED AS PARQUET
+        LOCATION '{output_path}'
+        TBLPROPERTIES('parquet.compression'='SNAPPY');
+        ''')
+        
+        delete_query = textwrap.dedent(f'''
+        DROP TABLE IF EXISTS {database}.{table_name};                                      
+                                       ''')
+        if drop_table:
+            self.athena_query(delete_query,workgroup = workgroup)
+            
+        self.athena_query(query,workgroup = workgroup)
+        print(f'-Input path = {s3_parquet_path}\nTable Name = {database}.{table_name}')
