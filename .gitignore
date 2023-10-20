@@ -160,6 +160,8 @@ cython_debug/
 #.idea/
 
 ## in development folders
-data_utils/*
 models_utils/*
 pipelines_utils/*
+data_utils/abt_functions.py
+data_utils/build_features.py
+data_utils/df_utils.py

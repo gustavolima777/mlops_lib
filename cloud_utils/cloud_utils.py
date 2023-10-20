@@ -2,12 +2,14 @@ import textwrap
 import sys
 import boto3
 import time
+import timeit
 import os
+import multiprocess
 import pandas as pd
 import numpy as np
+from pyarrow import concat_tables
+from pyarrow.parquet import ParquetDataset,read_table,read_schema
 from utils.utils import get_random_string
-from pyathena import connect
-from pyathena.pandas.cursor import PandasCursor
 
 
 class CloudUtils:
@@ -15,10 +17,14 @@ class CloudUtils:
                  team_id,
                  project_path='project_example/',
                  region='us-east-1',
-                 pd_cursor=True):
+                 athena_workgroup = 'gg_consumo_voomp'):
         
         self.session = self.get_boto3_session()
         self.s3 = self.session.client('s3')
+        self.glue = self.session.client('glue')
+        self.athena = self.session.client('athena')
+        self.athena_workgroup = athena_workgroup
+        self.sagemaker = self.session.client('sagemaker')
         self.team_id = team_id
         self.bucket = [bucket['Name'] 
                            for bucket in self.s3.list_buckets()['Buckets'] 
@@ -27,51 +33,14 @@ class CloudUtils:
         self.s3_staging_dir = 's3://' + self.bucket + '/'
         self.project_path = project_path
         self.tables_path = self.s3_staging_dir + self.project_path + 'tables/'
+        self.data_path = self.s3_staging_dir + self.project_path + 'data/'
         self.sagemaker_artefacts_path = self.s3_staging_dir + self.project_path + 'sagemaker/'
         self.region = region
-        self.pyathena_connector = self.get_pyathena_connector(pd_cursor)
-        self.glue = self.session.client('glue')
-        self.sagemaker = self.session.client('sagemaker')
+
+        print(f"Bucket {self.bucket} is sucessfull selected")
   
     def get_boto3_session(self):
         return boto3.Session()
-
-    def get_pyathena_connector(self, pd_cursor):
-        conn = connect(
-            s3_staging_dir=self.s3_staging_dir,
-            region_name=self.region,
-            cursor_class=PandasCursor if pd_cursor else None)
-        return conn.cursor() if pd_cursor else conn
-
-    def write_s3(self, df, file_path, save_index=False, int_to_str=False):
-        file_type = file_path.split('.')[-1]
-
-        if file_type == 'parquet':
-            save_method = df.to_parquet
-        elif file_type == 'csv':
-            save_method = df.to_csv
-        elif file_type == 'xlsx':
-            save_method = df.to_excel
-        else:
-            raise f'File Type ({file_type}) not allowed'
-
-        local_key_path = self.local_path + file_path
-        self.save_file_pandas(df, save_method, local_key_path, save_index,
-                              int_to_str)
-
-        key_path = self.project_path + file_path
-        self.s3.upload_file(local_key_path, self.bucket_name, key_path)
-
-        print(f'- Save to S3\n{file_type} File: {file_path}\nShape: '
-              + f'{df.shape}')
-
-    @staticmethod
-    def save_file_pandas(df, save_method, file_path, save_index, int_to_str):
-        if int_to_str:
-            save_method(file_path, index=save_index,
-                        quoting=csv.QUOTE_NONNUMERIC)
-        else:
-            save_method(file_path, index=save_index)
 
     def delete_files_from_s3(self, prefix):
         s3 = boto3.resource('s3')
@@ -83,26 +52,7 @@ class CloudUtils:
                 print(f'file {i.key.split("/")[-1]} deleted')
         except Exception as ex:
             print(str(ex))
-
-    def get_df_from_athena_query(self, file, cursor=False):
-        query = open(file, 'r')
-
-        if cursor:
-            df = self.pyathena_connector.execute(query.read()).as_pandas()
-        else:
-            df = pd.read_sql(query.read(), self.pyathena_connector)
-        query.close()
-
-        return df
-
-    def get_df_from_file(self, file, use_s3, method, **kwargs):
-        if use_s3:
-            file_path = self.s3_staging_dir + self.project_path + file
-        else:
-            file_path = self.local_path + file
-
-        return method(file_path, **kwargs)
-    
+            
     def delete_glue_job(self,job_name):
         try:
             delete_response = self.glue.delete_job(JobName=job_name)
@@ -116,7 +66,12 @@ class CloudUtils:
     def run_spark_sql(self,query_sql,spark_session):
         return spark_session.sql(query_sql)
     
-    def process_glue_job(self,query_sql,glue_arn,get_data = False,advanced_resourses = False,max_time_running_job_mins = 10):
+    def process_glue_job(self,
+                         query_sql,
+                         glue_arn,
+                         get_data = False,
+                         advanced_resourses = False,
+                         max_time_running_job_mins = 10):
         
         job_name = f'spark-to-s3-parquet-{get_random_string()}'
         print(f"-Start spark job name:{job_name}, staging_dir:{self.s3_staging_dir}")
@@ -235,3 +190,146 @@ class CloudUtils:
                 
         except Exception as error:
             print("An error occurred when trying create spark job:", error)
+            
+    def process_athena_query(sql_query,
+                             max_time_running_job_mins=10):
+    
+        listOfStatus = ['SUCCEEDED', 'FAILED', 'CANCELLED']
+        listOfInitialStatus = ['RUNNING', 'QUEUED']
+        
+        print('Starting Query Execution:')        
+        response = self.athena.start_query_execution(
+            QueryString = sql_query,
+            WorkGroup = self.athena_workgroup
+        )
+
+        queryExecutionId = response['QueryExecutionId']
+
+        status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
+        i_time = 0
+        
+        while status in listOfInitialStatus:
+            status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
+            if status in listOfStatus:
+                if status == 'SUCCEEDED':
+                    print('Query Succeeded!')
+                    results = self.athena.get_query_runtime_statistics(queryExecutionId)[['Rows']]
+                    print(f'-Query output rows:{results["OutputRows"]}\n-Query output bytes:{results["OutputBytes"]}')
+                elif status == 'FAILED':
+                    print('Query Failed!')
+                elif status == 'CANCELLED':
+                    print('Query Cancelled!')
+                break
+            else:
+                time.sleep(30)
+                i_time += 0.5
+                print(f"-Executing query: {i_time}mins")
+            if i_time > max_time_running_job_mins:
+                print("- Query timeout {}") 
+                self.athena.stop_query_execution(queryExecutionId)
+                break
+            
+    def parquet_to_pandas(file):
+        table = read_table('s3://'+file)
+        df = table.to_pandas()
+        return df
+
+    def s3_to_pandas(parquet_path):
+        t_start = timeit.default_timer()
+        parquet_files = ParquetDataset(parquet_path).files
+        p = multiprocess.Pool(multiprocess.cpu_count())
+        diff_time = timeit.default_timer()-t_start
+        return pd.concat(list(p.map(self.parquet_to_pandas,parquet_files)))
+
+    def execute_process_athena_query(sql_query,
+                                     pandas_dataframe = False,
+                                     max_time_running_job_mins=10,
+                                     ):
+    
+        t_start = timeit.default_timer()
+        print('-Start Execution')
+        
+        random_query_path = get_random_string(10)
+        if (pandas_dataframe==False):
+            
+            self.process_athena_query(sql_query,
+                                 max_time_running_job_mins)
+            
+            diff_time = timeit.default_timer()-t_start
+            print(f"Elapsed time: {round((diff_time)/60)}m{round(diff_time%60)}s")
+            
+        else:
+            
+            sql_query_adjust = textwrap.dedent(f"""UNLOAD ({sql_query})
+            TO '{self.data_path+random_query_path}' 
+            WITH (format = 'PARQUET',compression = 'SNAPPY')""")
+        
+            self.process_athena_query(sql_query_adjust,
+                                 max_time_running_job_mins)
+            
+            concat = self.s3_to_pandas(f'{self.data_path+random_query_path}')
+            diff_time = timeit.default_timer()-t_start
+            print(f"Pandas dataframe sucessfully created \n-Data path: {self.data_path+random_query_path}")
+            print(f"Elapsed time: {round((diff_time)/60)}m{round(diff_time%60)}s")
+            return concat
+        
+    def s3_to_athena_table(self,
+                           table_name,
+                           database,
+                           s3_parquet_path,
+                           is_unique_parquet=True,
+                           drop_table = False):
+        
+        if is_unique_parquet:
+            schema = read_schema(s3_parquet_path,memory_map=True)
+        else:
+            pyarrow_tables = []
+            parquet_files = ParquetDataset(s3_parquet_path).files
+            for file in parquet_files:
+                table = read_table('s3://'+file)
+                pyarrow_tables.append(table)
+            schema = concat_tables(pyarrow_tables).schema
+            
+        schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
+                           for name, pa_dtype in zip(schema.names, schema.types)))
+        
+        schema=", ".join(schema\
+        .assign(tipo = lambda x: np.select(
+                                            [
+                                                x.d_type == 'string',
+                                                x.d_type == 'int64',
+                                                x.d_type == 'int32', 
+                                                x.d_type.str.contains('decimal'),
+                                                x.d_type == 'bool', 
+                                                x.d_type.str.contains('timestamp')
+                                            ],
+                                            [
+                                                'string',
+                                                'bigint',
+                                                'int',
+                                                'decimal',
+                                                'boolean',
+                                                'timestamp'
+                                            ],
+                                            default = x.d_type))\
+        .assign(sql = lambda x: x.column + " " + x.tipo).sql)
+
+        output_path = self.tables_path+table_name+'_'+database+'/'
+            
+        query = textwrap.dedent(f'''
+        CREATE EXTERNAL TABLE {database}.{table_name}
+        ( {schema} )
+        STORED AS PARQUET
+        LOCATION '{output_path}'
+        TBLPROPERTIES('parquet.compression'='SNAPPY');
+        ''')
+        
+        delete_query = textwrap.dedent(f'''
+        DROP TABLE IF EXISTS {database}.{table_name};                                      
+                                       ''')
+        if drop_table:
+            self.process_athena_query(delete_query)
+            
+        self.process_athena_query(query)
+        print(f'-Input path = {s3_parquet_path}\nTable Name = {database}.{table_name}')
+    
