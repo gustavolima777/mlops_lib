@@ -7,9 +7,12 @@ import os
 import multiprocess
 import pandas as pd
 import numpy as np
+import pyarrow
 from pyarrow import concat_tables
 from pyarrow.parquet import ParquetDataset,read_table,read_schema
-from utils.utils import get_random_string
+from utils.utils import get_random_string, convert_timestamps_to_string
+from data_utils.dataquality_utils import DataQualityUtils 
+
 
 
 class CloudUtils:
@@ -191,7 +194,8 @@ class CloudUtils:
         except Exception as error:
             print("An error occurred when trying create spark job:", error)
             
-    def process_athena_query(sql_query,
+    def process_athena_query(self,
+                             sql_query,
                              max_time_running_job_mins=10):
     
         listOfStatus = ['SUCCEEDED', 'FAILED', 'CANCELLED']
@@ -204,7 +208,9 @@ class CloudUtils:
         )
 
         queryExecutionId = response['QueryExecutionId']
-
+        print(f'Query id = {queryExecutionId}')
+        
+        execution_path = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['ResultConfiguration']['OutputLocation'] 
         status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
         i_time = 0
         
@@ -213,8 +219,12 @@ class CloudUtils:
             if status in listOfStatus:
                 if status == 'SUCCEEDED':
                     print('Query Succeeded!')
-                    results = self.athena.get_query_runtime_statistics(queryExecutionId)[['Rows']]
-                    print(f'-Query output rows:{results["OutputRows"]}\n-Query output bytes:{results["OutputBytes"]}')
+                    return queryExecutionId,execution_path
+                    try:
+                        results = self.athena.get_query_runtime_statistics(QueryExecutionId = queryExecutionId)['QueryRuntimeStatistics']['Rows']
+                        print(f'-Query output rows:{results["OutputRows"]}\n-Query output bytes:{results["OutputBytes"]/100000}mbs')
+                    except:
+                        print('No Rows in query execution')
                 elif status == 'FAILED':
                     print('Query Failed!')
                 elif status == 'CANCELLED':
@@ -228,20 +238,30 @@ class CloudUtils:
                 print("- Query timeout {}") 
                 self.athena.stop_query_execution(queryExecutionId)
                 break
-            
-    def parquet_to_pandas(file):
-        table = read_table('s3://'+file)
+    
+    def parquet_to_pandas(self,
+                          file):
+        
+        schema = read_schema('s3://'+file,memory_map=True)
+        schema_dict = {name:str(pa_dtype) 
+                           for name, pa_dtype in zip(schema.names, schema.types)}
+        
+        table = read_table('s3://'+file, 
+                           schema=pyarrow.schema(convert_timestamps_to_string(schema_dict)))
+        
         df = table.to_pandas()
         return df
-
+    
+    @staticmethod
     def s3_to_pandas(parquet_path):
-        t_start = timeit.default_timer()
+        
         parquet_files = ParquetDataset(parquet_path).files
         p = multiprocess.Pool(multiprocess.cpu_count())
-        diff_time = timeit.default_timer()-t_start
-        return pd.concat(list(p.map(self.parquet_to_pandas,parquet_files)))
+        concat = pd.concat(list(p.map(parquet_to_pandas,parquet_files)))
+        return concat
 
-    def execute_process_athena_query(sql_query,
+    def execute_process_athena_query(self,
+                                     sql_query,
                                      pandas_dataframe = False,
                                      max_time_running_job_mins=10,
                                      ):
@@ -312,15 +332,13 @@ class CloudUtils:
                                                 'timestamp'
                                             ],
                                             default = x.d_type))\
-        .assign(sql = lambda x: x.column + " " + x.tipo).sql)
-
-        output_path = self.tables_path+table_name+'_'+database+'/'
-            
+                                                .assign(sql = lambda x: x.column + " " + x.tipo).sql)
+   
         query = textwrap.dedent(f'''
         CREATE EXTERNAL TABLE {database}.{table_name}
         ( {schema} )
         STORED AS PARQUET
-        LOCATION '{output_path}'
+        LOCATION '{s3_parquet_path}'
         TBLPROPERTIES('parquet.compression'='SNAPPY');
         ''')
         
@@ -332,4 +350,17 @@ class CloudUtils:
             
         self.process_athena_query(query)
         print(f'-Input path = {s3_parquet_path}\nTable Name = {database}.{table_name}')
-    
+        
+        query_id,execution_path = self.process_athena_query(f'select count(*) from {database}.{table_name}')
+        
+        print(f'Total rows in created table = {pd.read_csv(execution_path).iloc[0,0]}')
+        
+    def path_validation(self,
+                        parquet_path,
+                        ):
+        
+        df = self.s3_to_pandas(parquet_path)
+        print('-Init DataQualityUtils')
+        data = DataQualityUtils(data = df)
+            
+        return data.get_data_infos()

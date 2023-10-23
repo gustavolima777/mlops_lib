@@ -35,3 +35,10 @@ def fc_log_fim(time_inicio):
     tempo = round((datetime.datetime.now() - time_inicio).total_seconds()/60, 2)
     print(f"Tempo de execução: {tempo} min")
     print("--------------------\n")
+    
+def convert_timestamps_to_string(data_dict):
+    converted_dict = data_dict.copy()
+    for key, value in data_dict.items():
+        if 'timestamp' in value:
+            converted_dict[key] = 'string'
+    return converted_dict
