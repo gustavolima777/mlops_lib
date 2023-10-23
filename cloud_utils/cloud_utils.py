@@ -238,9 +238,9 @@ class CloudUtils:
                 print("- Query timeout {}") 
                 self.athena.stop_query_execution(queryExecutionId)
                 break
-    
-    def parquet_to_pandas(self,
-                          file):
+            
+    @staticmethod
+    def parquet_to_pandas(file):
         
         schema = read_schema('s3://'+file,memory_map=True)
         schema_dict = {name:str(pa_dtype) 
