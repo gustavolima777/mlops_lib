@@ -252,12 +252,11 @@ class CloudUtils:
         df = table.to_pandas()
         return df
     
-    @staticmethod
-    def s3_to_pandas(parquet_path):
+    def s3_to_pandas(self,parquet_path):
         
         parquet_files = ParquetDataset(parquet_path).files
         p = multiprocess.Pool(multiprocess.cpu_count())
-        concat = pd.concat(list(p.map(parquet_to_pandas,parquet_files)))
+        concat = pd.concat(list(p.map(self.parquet_to_pandas,parquet_files)))
         return concat
 
     def execute_process_athena_query(self,
