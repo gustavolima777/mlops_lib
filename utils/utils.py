@@ -41,4 +41,6 @@ def convert_timestamps_to_string(data_dict):
     for key, value in data_dict.items():
         if 'timestamp' in value:
             converted_dict[key] = 'string'
+        if 'decimal' in value:
+            converted_dict[key] = 'float'
     return converted_dict
