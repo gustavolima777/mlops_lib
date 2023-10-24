@@ -13,8 +13,6 @@ from pyarrow.parquet import ParquetDataset,read_table,read_schema
 from utils.utils import get_random_string, convert_timestamps_to_string
 from data_utils.dataquality_utils import DataQualityUtils 
 
-
-
 class CloudUtils:
     def __init__(self,
                  team_id,
@@ -297,10 +295,12 @@ class CloudUtils:
                            database,
                            s3_parquet_path,
                            is_unique_parquet=True,
-                           drop_table = False):
+                           drop_table = False,
+                           get_dataquality = True):
         
         if is_unique_parquet:
             schema = read_schema(s3_parquet_path,memory_map=True)
+            data = read_table(s3_parquet_path)
         else:
             pyarrow_tables = []
             parquet_files = ParquetDataset(s3_parquet_path).files
@@ -308,6 +308,9 @@ class CloudUtils:
                 table = read_table('s3://'+file)
                 pyarrow_tables.append(table)
             schema = concat_tables(pyarrow_tables).schema
+            data = DataQualityUtils(schema)
+
+            
             
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
@@ -331,8 +334,9 @@ class CloudUtils:
                                                 'timestamp'
                                             ],
                                             default = x.d_type))\
-                                                .assign(sql = lambda x: x.column + " " + x.tipo).sql)
-   
+        .assign(sql = lambda x: x.column + " " + x.tipo).sql)
+
+            
         query = textwrap.dedent(f'''
         CREATE EXTERNAL TABLE {database}.{table_name}
         ( {schema} )
@@ -345,21 +349,16 @@ class CloudUtils:
         DROP TABLE IF EXISTS {database}.{table_name};                                      
                                        ''')
         if drop_table:
+            print("-Start delete Table Query")
             self.process_athena_query(delete_query)
             
+        print("-Start create table Query")
         self.process_athena_query(query)
         print(f'-Input path = {s3_parquet_path}\nTable Name = {database}.{table_name}')
-        
+        print("-Start validy table Query")
         query_id,execution_path = self.process_athena_query(f'select count(*) from {database}.{table_name}')
         
         print(f'Total rows in created table = {pd.read_csv(execution_path).iloc[0,0]}')
         
-    def path_validation(self,
-                        parquet_path,
-                        ):
-        
-        df = self.s3_to_pandas(parquet_path)
-        print('-Init DataQualityUtils')
-        data = DataQualityUtils(data = df)
-            
-        return data.get_data_infos()
+        if get_dataquality:
+            return data.get_data_infos()
