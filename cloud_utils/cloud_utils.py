@@ -322,7 +322,7 @@ class CloudUtils:
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
         
-        schema['column'] = schema_['column'].apply(lambda x: x.strip().replace(' ','_'))
+        schema['column'] = schema['column'].apply(lambda x: x.strip().replace(' ','_'))
         
         schema=", ".join(schema\
         .assign(tipo = lambda x: np.select(
