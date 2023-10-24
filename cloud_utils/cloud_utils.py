@@ -33,7 +33,7 @@ class CloudUtils:
         
         self.s3_staging_dir = 's3://' + self.bucket + '/'
         self.project_path = project_path
-        self.tables_path = self.s3_staging_dir + self.project_path + 'tables/'
+        self.tables_path = self.s3_staging_dir + self.project_path + '/tables/'
         self.data_path = self.s3_staging_dir + self.project_path + 'data/'
         self.sagemaker_artefacts_path = self.s3_staging_dir + self.project_path + 'sagemaker/'
         self.region = region
@@ -370,3 +370,15 @@ class CloudUtils:
         
         if get_dataquality:
             return data.get_data_infos()
+        
+    def csv_txt_to_parquet(self,
+                           txt_complete_path,
+                           delimiter = ';'
+                           ):
+        try:
+            df = pd.read_csv(txt_complete_path,delimiter=delimiter)
+        except Exception as read_csv_error:
+            print("An error occurred:", read_csv_error)
+        random_path_table = self.tables_path+get_random_string(10)+'/'
+        df.to_parquet(random_path_table,index=False)
+        print(f'Parquet saved in {random_path_table}')
