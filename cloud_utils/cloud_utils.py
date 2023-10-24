@@ -296,7 +296,7 @@ class CloudUtils:
                            s3_parquet_path,
                            is_unique_parquet=True,
                            drop_table = False,
-                           get_dataquality = True):
+                           get_dataquality = False):
         
         if is_unique_parquet:
             schema = read_schema(s3_parquet_path,memory_map=True)
@@ -307,11 +307,10 @@ class CloudUtils:
             for file in parquet_files:
                 table = read_table('s3://'+file)
                 pyarrow_tables.append(table)
-            schema = concat_tables(pyarrow_tables).schema
-            data = DataQualityUtils(schema)
+                concat = concat_tables(pyarrow_tables)
+            schema = concat.schema
+            data = DataQualityUtils(concat)
 
-            
-            
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
         
@@ -335,7 +334,6 @@ class CloudUtils:
                                             ],
                                             default = x.d_type))\
         .assign(sql = lambda x: x.column + " " + x.tipo).sql)
-
             
         query = textwrap.dedent(f'''
         CREATE EXTERNAL TABLE {database}.{table_name}
