@@ -298,19 +298,26 @@ class CloudUtils:
                            drop_table = False,
                            get_dataquality = False):
         
+        print("Make sure that when using a path the files have the same schema!!!")
+        
         if is_unique_parquet:
             schema = read_schema(s3_parquet_path,memory_map=True)
-            data = read_table(s3_parquet_path)
+            if get_dataquality:
+                data = read_table(s3_parquet_path)
         else:
             pyarrow_tables = []
             parquet_files = ParquetDataset(s3_parquet_path).files
-            for file in parquet_files:
-                table = read_table('s3://'+file)
-                pyarrow_tables.append(table)
-                
-            concat = concat_tables(pyarrow_tables)
-            schema = concat.schema
-            data = DataQualityUtils(concat)
+            
+            if get_dataquality:
+                for file in parquet_files:
+                    table = read_table('s3://'+file)
+                    pyarrow_tables.append(table)
+                    
+                concat = concat_tables(pyarrow_tables)
+                schema = concat.schema
+                data = DataQualityUtils(concat)
+            else:
+                schema = read_table('s3://'+parquet_files[0]).schema
 
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
