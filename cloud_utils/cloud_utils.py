@@ -33,7 +33,7 @@ class CloudUtils:
         
         self.s3_staging_dir = 's3://' + self.bucket + '/'
         self.project_path = project_path
-        self.tables_path = self.s3_staging_dir + self.project_path + 'tables/'
+        self.tables_path = self.s3_staging_dir + self.project_path + '/tables/'
         self.data_path = self.s3_staging_dir + self.project_path + 'data/'
         self.sagemaker_artefacts_path = self.s3_staging_dir + self.project_path + 'sagemaker/'
         self.region = region
@@ -216,7 +216,7 @@ class CloudUtils:
             status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
             if status in listOfStatus:
                 if status == 'SUCCEEDED':
-                    print('Query Succeeded!')
+                    print(f'Query Succeeded! {i_time}mins')
                     return queryExecutionId,execution_path
                     try:
                         results = self.athena.get_query_runtime_statistics(QueryExecutionId = queryExecutionId)['QueryRuntimeStatistics']['Rows']
@@ -229,8 +229,8 @@ class CloudUtils:
                     print('Query Cancelled!')
                 break
             else:
-                time.sleep(30)
-                i_time += 0.5
+                time.sleep(10)
+                i_time += 0.167
                 print(f"-Executing query: {i_time}mins")
             if i_time > max_time_running_job_mins:
                 print("- Query timeout {}") 
@@ -296,24 +296,33 @@ class CloudUtils:
                            s3_parquet_path,
                            is_unique_parquet=True,
                            drop_table = False,
-                           get_dataquality = True):
+                           get_dataquality = False):
+        
+        print("Make sure that when using a path the files have the same schema!!!")
         
         if is_unique_parquet:
             schema = read_schema(s3_parquet_path,memory_map=True)
-            data = read_table(s3_parquet_path)
+            if get_dataquality:
+                data = read_table(s3_parquet_path)
         else:
             pyarrow_tables = []
             parquet_files = ParquetDataset(s3_parquet_path).files
-            for file in parquet_files:
-                table = read_table('s3://'+file)
-                pyarrow_tables.append(table)
-            schema = concat_tables(pyarrow_tables).schema
-            data = DataQualityUtils(schema)
+            
+            if get_dataquality:
+                for file in parquet_files:
+                    table = read_table('s3://'+file)
+                    pyarrow_tables.append(table)
+                    
+                concat = concat_tables(pyarrow_tables)
+                schema = concat.schema
+                data = DataQualityUtils(concat)
+            else:
+                schema = read_table('s3://'+parquet_files[0]).schema
 
-            
-            
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
+        
+        schema['column'] = schema['column'].apply(lambda x: x.strip().replace(' ','_'))
         
         schema=", ".join(schema\
         .assign(tipo = lambda x: np.select(
@@ -335,7 +344,6 @@ class CloudUtils:
                                             ],
                                             default = x.d_type))\
         .assign(sql = lambda x: x.column + " " + x.tipo).sql)
-
             
         query = textwrap.dedent(f'''
         CREATE EXTERNAL TABLE {database}.{table_name}
@@ -362,3 +370,31 @@ class CloudUtils:
         
         if get_dataquality:
             return data.get_data_infos()
+        
+    def csv_txt_to_parquet(self,
+                           file_path,
+                           delimiter = ';'
+                           ):
+        
+        bucket_file = file_path.replace("s3://","").split('/')[0]
+        my_bucket = self.session.resource('s3').Bucket(bucket_file)
+        prefix = '/'.join(file_path.replace('s3://','').split('/')[1:])
+        text_files_list = []
+        
+        for objects in my_bucket.objects.filter(Prefix=prefix):
+            if objects.key.endswith('txt') or objects.key.endswith('csv'):
+                text_files_list.append(objects.key)
+        list_text_df = []        
+        try:
+            for txt_file in text_files_list:            
+                df = pd.read_csv(bucket_file+'/'+txt_file,delimiter=delimiter)
+                list_text_df.append(df)
+            df = pd.concat(list_text_df)
+        except Exception as read_csv_error:
+            print("An error occurred:", read_csv_error)
+            break
+        
+        r_string = get_random_string(10)
+        random_path_table = self.tables_path+r_string+'/'
+        df.to_parquet(random_path_table+r_string+'.parquet',index=False)
+        print(f'Parquet saved in {random_path_table}')
