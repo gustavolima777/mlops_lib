@@ -372,13 +372,29 @@ class CloudUtils:
             return data.get_data_infos()
         
     def csv_txt_to_parquet(self,
-                           txt_complete_path,
+                           file_path,
                            delimiter = ';'
                            ):
+        
+        bucket_file = file_path.replace("s3://","").split('/')[0]
+        my_bucket = self.session.resource('s3').Bucket(bucket_file)
+        prefix = '/'.join(file_path.replace('s3://','').split('/')[1:])
+        text_files_list = []
+        
+        for objects in my_bucket.objects.filter(Prefix=prefix):
+            if objects.key.endswith('txt') or objects.key.endswith('csv'):
+                text_files_list.append(objects.key)
+        list_text_df = []        
         try:
-            df = pd.read_csv(txt_complete_path,delimiter=delimiter)
+            for txt_file in text_files_list:            
+                df = pd.read_csv(bucket_file+'/'+txt_file,delimiter=delimiter)
+                list_text_df.append(df)
+            df = pd.concat(list_text_df)
         except Exception as read_csv_error:
             print("An error occurred:", read_csv_error)
-        random_path_table = self.tables_path+get_random_string(10)+'/'
-        df.to_parquet(random_path_table,index=False)
+            break
+        
+        r_string = get_random_string(10)
+        random_path_table = self.tables_path+r_string+'/'
+        df.to_parquet(random_path_table+r_string+'.parquet',index=False)
         print(f'Parquet saved in {random_path_table}')
