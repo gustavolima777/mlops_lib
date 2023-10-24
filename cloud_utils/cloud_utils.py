@@ -216,7 +216,7 @@ class CloudUtils:
             status = self.athena.get_query_execution(QueryExecutionId = queryExecutionId)['QueryExecution']['Status']['State']
             if status in listOfStatus:
                 if status == 'SUCCEEDED':
-                    print('Query Succeeded!')
+                    print(f'Query Succeeded! {i_time}mins')
                     return queryExecutionId,execution_path
                     try:
                         results = self.athena.get_query_runtime_statistics(QueryExecutionId = queryExecutionId)['QueryRuntimeStatistics']['Rows']
@@ -229,8 +229,8 @@ class CloudUtils:
                     print('Query Cancelled!')
                 break
             else:
-                time.sleep(30)
-                i_time += 0.5
+                time.sleep(10)
+                i_time += 0.167
                 print(f"-Executing query: {i_time}mins")
             if i_time > max_time_running_job_mins:
                 print("- Query timeout {}") 
