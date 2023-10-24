@@ -307,7 +307,8 @@ class CloudUtils:
             for file in parquet_files:
                 table = read_table('s3://'+file)
                 pyarrow_tables.append(table)
-                concat = concat_tables(pyarrow_tables)
+                
+            concat = concat_tables(pyarrow_tables)
             schema = concat.schema
             data = DataQualityUtils(concat)
 
