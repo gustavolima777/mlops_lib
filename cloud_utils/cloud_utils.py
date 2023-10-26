@@ -227,7 +227,7 @@ class CloudUtils:
                     print('Query Failed!')
                 elif status == 'CANCELLED':
                     print('Query Cancelled!')
-                break
+                    break
             else:
                 time.sleep(10)
                 i_time += 0.167
