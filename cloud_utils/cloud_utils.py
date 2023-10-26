@@ -384,6 +384,7 @@ class CloudUtils:
         for objects in my_bucket.objects.filter(Prefix=prefix):
             if objects.key.endswith('txt') or objects.key.endswith('csv'):
                 text_files_list.append(objects.key)
+                
         list_text_df = []        
         try:
             for txt_file in text_files_list:            
@@ -393,8 +394,9 @@ class CloudUtils:
         except Exception as read_csv_error:
             print("An error occurred:", read_csv_error)
         
-        df = pd.concat(list_text_df)
+        concat = pd.concat(list_text_df)
+        
         r_string = get_random_string(10)
         random_path_table = self.tables_path+r_string+'/'
-        df.to_parquet(random_path_table+r_string+'.parquet',index=False)
+        concat.to_parquet(random_path_table+r_string+'.parquet',index=False)
         print(f'Parquet saved in {random_path_table}')
