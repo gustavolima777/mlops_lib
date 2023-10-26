@@ -392,7 +392,6 @@ class CloudUtils:
             df = pd.concat(list_text_df)
         except Exception as read_csv_error:
             print("An error occurred:", read_csv_error)
-            break
         
         r_string = get_random_string(10)
         random_path_table = self.tables_path+r_string+'/'
