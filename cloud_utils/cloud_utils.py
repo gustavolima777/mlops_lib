@@ -387,12 +387,13 @@ class CloudUtils:
         list_text_df = []        
         try:
             for txt_file in text_files_list:            
-                df = pd.read_csv(bucket_file+'/'+txt_file,delimiter=delimiter)
+                df = pd.read_csv('s3://'+bucket_file+'/'+txt_file,delimiter=delimiter)
                 list_text_df.append(df)
-            df = pd.concat(list_text_df)
+            
         except Exception as read_csv_error:
             print("An error occurred:", read_csv_error)
         
+        df = pd.concat(list_text_df)
         r_string = get_random_string(10)
         random_path_table = self.tables_path+r_string+'/'
         df.to_parquet(random_path_table+r_string+'.parquet',index=False)
