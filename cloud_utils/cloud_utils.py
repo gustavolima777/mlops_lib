@@ -294,16 +294,21 @@ class CloudUtils:
                            table_name,
                            database,
                            s3_parquet_path,
-                           is_unique_parquet=True,
+                           is_unique_parquet=False,
                            drop_table = False,
-                           get_dataquality = False):
+                           get_dataquality = False,
+                           move_unique_to_s3_path = False):
         
         print("Make sure that when using a path the files have the same schema!!!")
         
         if is_unique_parquet:
-            schema = read_schema(s3_parquet_path,memory_map=True)
+            if move_unique_to_s3_path:
+                s3_parquet_path = move_s3_object(s3_parquet_path=s3_parquet_path)
+                print(f'Parquet moved to {s3_parquet_path}')
             if get_dataquality:
                 data = read_table(s3_parquet_path)
+                
+            schema = read_schema(s3_parquet_path,memory_map=True)
         else:
             pyarrow_tables = []
             parquet_files = ParquetDataset(s3_parquet_path).files
@@ -363,6 +368,7 @@ class CloudUtils:
         print("-Start create table Query")
         self.process_athena_query(query)
         print(f'-Input path = {s3_parquet_path}\nTable Name = {database}.{table_name}')
+        
         print("-Start validy table Query")
         query_id,execution_path = self.process_athena_query(f'select count(*) from {database}.{table_name}')
         
@@ -400,3 +406,20 @@ class CloudUtils:
         random_path_table = self.tables_path+r_string+'/'
         concat.to_parquet(random_path_table+r_string+'.parquet',index=False)
         print(f'Parquet saved in {random_path_table}')
+        
+        return random_path_table
+    
+    def move_s3_object(self,
+                       file_s3_parquet_path):
+        
+        key_in = '/'.join(file_s3_parquet_path.replace('s3://','').split('/')[1:])
+        bucket_in = file_s3_parquet_path.replace('s3://','').split('/')[0]
+        r = get_random_string(10)
+        key_out = '/'.join(self.tables_path.replace('s3://','').split('/')[1:])+r+'/'+r+'.parquet'
+                
+        self.s3.copy_object(
+            CopySource={'Bucket': bucket_in, 'Key': key_in},
+            Bucket=self.bucket,
+            Key=key_out
+            )
+        return self.bucket+'/'+key_out
