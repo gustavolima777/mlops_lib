@@ -34,7 +34,7 @@ class CloudUtils:
         self.s3_staging_dir = 's3://' + self.bucket + '/'
         self.project_path = project_path
         self.tables_path = self.s3_staging_dir + self.project_path + '/tables/'
-        self.data_path = self.s3_staging_dir + self.project_path + 'data/'
+        self.data_path = self.s3_staging_dir + self.project_path + '/data/'
         self.sagemaker_artefacts_path = self.s3_staging_dir + self.project_path + 'sagemaker/'
         self.region = region
 
