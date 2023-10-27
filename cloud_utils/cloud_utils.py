@@ -323,7 +323,7 @@ class CloudUtils:
                 schema = concat.schema
                 data = DataQualityUtils(concat)
             else:
-                schema = read_table('s3://'+parquet_files[0]).schema
+                schema = read_schema('s3://'+parquet_files[0])
 
         schema = pd.DataFrame(({"column": name, "d_type": str(pa_dtype)} 
                            for name, pa_dtype in zip(schema.names, schema.types)))
