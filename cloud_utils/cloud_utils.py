@@ -303,12 +303,13 @@ class CloudUtils:
         
         if is_unique_parquet:
             if move_unique_to_s3_path:
-                s3_parquet_path = move_s3_object(s3_parquet_path=s3_parquet_path)
+                s3_parquet_path = self.move_s3_object(s3_parquet_path=s3_parquet_path)
                 print(f'Parquet moved to {s3_parquet_path}')
             if get_dataquality:
                 data = read_table(s3_parquet_path)
                 
             schema = read_schema(s3_parquet_path,memory_map=True)
+            s3_parquet_path ='/'.join(s3_parquet_path.split('/')[:-1])+'/'
         else:
             pyarrow_tables = []
             parquet_files = ParquetDataset(s3_parquet_path).files
