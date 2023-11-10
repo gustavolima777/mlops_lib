@@ -3,6 +3,6 @@ pandas
 numpy
 boto3
 textwrap
-pyarrow==12.0.1
+pyarrow==14.0.1
 multiprocess==0.70.15
 git+https://github.com/gustavolima777/mlops_lib.git
